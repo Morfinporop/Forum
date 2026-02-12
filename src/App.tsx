@@ -1,16 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import emailjs from '@emailjs/browser';
 import { ForumProvider } from './store';
 import { useAuth, useForum, useApplications, useAdmin, useMessages } from './hooks';
 import { formatDate, formatFullDate, getRankByPosts, getRoleInfo, fileToBase64, APPLICATION_TYPES, APPLICATION_STATUS } from './utils/helpers';
 import { User, Reply, Application, MediaFile } from './types';
 
-const EMAIL_SERVICE_ID = 'service_rgix1v6';
-const EMAIL_TEMPLATE_ID = 'template_gp0qtev';
-const EMAIL_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
-
-emailjs.init(EMAIL_PUBLIC_KEY);
+const API_URL = 'https://your-railway-app.up.railway.app';
 
 function Icon({ name, className = '' }: { name: string; className?: string }) {
   return <img src={`https://api.iconify.design/${name}.svg?color=white`} alt="" className={`w-5 h-5 ${className}`} />;
@@ -190,7 +185,6 @@ function ForumApp() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [verificationCode, setVerificationCode] = useState('');
-    const [generatedCode, setGeneratedCode] = useState('');
     const [step, setStep] = useState<'form' | 'verify'>('form');
     const [error, setError] = useState('');
     const [emailError, setEmailError] = useState('');
@@ -224,27 +218,15 @@ function ForumApp() {
     };
 
     const sendVerificationEmail = async () => {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedCode(code);
-      
       try {
-        const now = new Date();
-        const time = now.toLocaleString('ru-RU', {
-          day: '2-digit',
-          month: '2-digit', 
-          year: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit'
+        const response = await fetch(`${API_URL}/api/send-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, name: username })
         });
 
-        await emailjs.send(EMAIL_SERVICE_ID, EMAIL_TEMPLATE_ID, {
-          to_email: email,
-          name: username,
-          message: `Ваш код подтверждения для регистрации на форуме LostRP: ${code}`,
-          time: time
-        });
-
-        return true;
+        const data = await response.json();
+        return data.success;
       } catch (err) {
         console.error('Email error:', err);
         return false;
@@ -289,16 +271,28 @@ function ForumApp() {
       }
     };
 
-    const handleVerify = () => {
-      if (verificationCode === generatedCode) {
-        if (register(email, username, password)) {
-          setShowAuthModal(false);
-          resetForm();
+    const handleVerify = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/verify-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, code: verificationCode })
+        });
+
+        const data = await response.json();
+        
+        if (data.success) {
+          if (register(email, username, password)) {
+            setShowAuthModal(false);
+            resetForm();
+          } else {
+            setError('Ошибка регистрации');
+          }
         } else {
-          setError('Ошибка регистрации');
+          setError(data.error || 'Неверный код подтверждения');
         }
-      } else {
-        setError('Неверный код подтверждения');
+      } catch (err) {
+        setError('Ошибка проверки кода');
       }
     };
 
@@ -320,7 +314,6 @@ function ForumApp() {
       setUsername('');
       setPassword('');
       setVerificationCode('');
-      setGeneratedCode('');
       setStep('form');
       setError('');
       setEmailError('');
