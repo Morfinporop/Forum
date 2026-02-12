@@ -1,9 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ForumProvider, useForumContext } from './store';
+import emailjs from '@emailjs/browser';
+import { ForumProvider } from './store';
 import { useAuth, useForum, useApplications, useAdmin, useMessages } from './hooks';
 import { formatDate, formatFullDate, getRankByPosts, getRoleInfo, fileToBase64, APPLICATION_TYPES, APPLICATION_STATUS } from './utils/helpers';
-import { User, Topic, Reply, News, Application, Review, Category, MediaFile, Message } from './types';
+import { User, Reply, Application, MediaFile } from './types';
+
+const EMAIL_SERVICE_ID = 'service_rgix1v6';
+const EMAIL_TEMPLATE_ID = 'template_gp0qtev';
+const EMAIL_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
+
+emailjs.init(EMAIL_PUBLIC_KEY);
 
 function Icon({ name, className = '' }: { name: string; className?: string }) {
   return <img src={`https://api.iconify.design/${name}.svg?color=white`} alt="" className={`w-5 h-5 ${className}`} />;
@@ -44,14 +51,15 @@ function Button({ children, variant = 'primary', size = 'md', onClick, disabled,
   );
 }
 
-function Input({ label, type = 'text', value, onChange, placeholder, className = '' }: { 
-  label?: string; type?: string; value: string; onChange: (v: string) => void; placeholder?: string; className?: string 
+function Input({ label, type = 'text', value, onChange, placeholder, className = '', error }: { 
+  label?: string; type?: string; value: string; onChange: (v: string) => void; placeholder?: string; className?: string; error?: string 
 }) {
   return (
     <div className={className}>
       {label && <label className="block text-sm text-neutral-400 mb-1">{label}</label>}
       <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2.5 text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-600" />
+        className={`w-full bg-neutral-900 border rounded-lg px-4 py-2.5 text-white placeholder-neutral-500 focus:outline-none ${error ? 'border-red-500' : 'border-neutral-800 focus:border-neutral-600'}`} />
+      {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
     </div>
   );
 }
@@ -90,35 +98,6 @@ function Modal({ isOpen, onClose, title, children, size = 'md' }: {
   );
 }
 
-function ImageUpload({ onUpload, label, preview, accept = 'image/*' }: { 
-  onUpload: (url: string) => void; label: string; preview?: string; accept?: string 
-}) {
-  const [dragOver, setDragOver] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = async (file: File) => {
-    const base64 = await fileToBase64(file);
-    onUpload(base64);
-  };
-
-  return (
-    <div className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${dragOver ? 'border-white bg-neutral-800' : 'border-neutral-700 hover:border-neutral-500'}`}
-      onClick={() => inputRef.current?.click()} onDragOver={e => { e.preventDefault(); setDragOver(true); }} 
-      onDragLeave={() => setDragOver(false)} onDrop={e => { e.preventDefault(); setDragOver(false); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); }}>
-      <input ref={inputRef} type="file" accept={accept} className="hidden" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
-      {preview ? (
-        <img src={preview} alt="" className="max-h-32 mx-auto rounded-lg object-cover" />
-      ) : (
-        <>
-          <Icon name="mdi:cloud-upload" className="w-10 h-10 mx-auto mb-2 opacity-50" />
-          <p className="text-neutral-400">{label}</p>
-          <p className="text-neutral-600 text-sm mt-1">Перетащите или нажмите для выбора</p>
-        </>
-      )}
-    </div>
-  );
-}
-
 function UserBadges({ user }: { user: User }) {
   const rank = getRankByPosts(user.posts);
   const role = getRoleInfo(user.role);
@@ -131,10 +110,10 @@ function UserBadges({ user }: { user: User }) {
 }
 
 function ForumApp() {
-  const { currentUser, users, register, login, logout, updateProfile, followUser, blockUser, bookmarkTopic } = useAuth();
-  const { categories, topics, replies, news, reviews, createCategory, updateCategory, deleteCategory, createTopic, updateTopic, deleteTopic, viewTopic, likeTopic, createReply, updateReply, deleteReply, likeReply, createNews, updateNews, deleteNews, likeNews, createReview, deleteReview } = useForum();
+  const { currentUser, users, register, login, logout, updateProfile, followUser, bookmarkTopic, checkEmailExists, checkUsernameExists } = useAuth();
+  const { categories, topics, replies, news, reviews, createCategory, deleteCategory, createTopic, updateTopic, deleteTopic, viewTopic, likeTopic, createReply, deleteReply, likeReply, createNews, updateNews, deleteNews, likeNews, createReview } = useForum();
   const { applications, createApplication, updateApplicationStatus, addApplicationResponse, deleteApplication } = useApplications();
-  const { banUser, unbanUser, muteUser, unmuteUser, warnUser, changeUserRole, updateUser } = useAdmin();
+  const { banUser, unbanUser, updateUser } = useAdmin();
   const { sendMessage, getConversations, getMessagesWith, getUnreadCount } = useMessages();
 
   const [view, setView] = useState<'news' | 'forum' | 'category' | 'topic' | 'applications' | 'application' | 'profile' | 'members' | 'messages' | 'conversation' | 'admin'>('news');
@@ -210,35 +189,221 @@ function ForumApp() {
     const [email, setEmail] = useState('');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [verificationCode, setVerificationCode] = useState('');
+    const [generatedCode, setGeneratedCode] = useState('');
+    const [step, setStep] = useState<'form' | 'verify'>('form');
     const [error, setError] = useState('');
+    const [emailError, setEmailError] = useState('');
+    const [usernameError, setUsernameError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [resendTimer, setResendTimer] = useState(0);
 
-    const handleSubmit = () => {
-      setError('');
-      if (authMode === 'login') {
-        if (!login(email, password)) setError('Неверный email или пароль');
-        else setShowAuthModal(false);
+    useEffect(() => {
+      if (resendTimer > 0) {
+        const timer = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+        return () => clearTimeout(timer);
+      }
+    }, [resendTimer]);
+
+    const validateEmail = (value: string) => {
+      setEmail(value);
+      if (value && checkEmailExists(value)) {
+        setEmailError('Этот email уже зарегистрирован');
       } else {
-        if (!email || !username || !password) { setError('Заполните все поля'); return; }
-        if (!register(email, username, password)) setError('Email уже зарегистрирован');
-        else setShowAuthModal(false);
+        setEmailError('');
       }
     };
 
+    const validateUsername = (value: string) => {
+      setUsername(value);
+      if (value && checkUsernameExists(value)) {
+        setUsernameError('Это имя уже занято');
+      } else {
+        setUsernameError('');
+      }
+    };
+
+    const sendVerificationEmail = async () => {
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      setGeneratedCode(code);
+      
+      try {
+        const now = new Date();
+        const time = now.toLocaleString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit', 
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        await emailjs.send(EMAIL_SERVICE_ID, EMAIL_TEMPLATE_ID, {
+          to_email: email,
+          name: username,
+          message: `Ваш код подтверждения для регистрации на форуме LostRP: ${code}`,
+          time: time
+        });
+
+        return true;
+      } catch (err) {
+        console.error('Email error:', err);
+        return false;
+      }
+    };
+
+    const handleSubmit = async () => {
+      setError('');
+      
+      if (authMode === 'login') {
+        if (!login(email, password)) {
+          setError('Неверный email или пароль');
+        } else {
+          setShowAuthModal(false);
+          resetForm();
+        }
+      } else {
+        if (!email || !username || !password) {
+          setError('Заполните все поля');
+          return;
+        }
+
+        if (emailError || usernameError) {
+          return;
+        }
+
+        if (password.length < 6) {
+          setError('Пароль должен быть не менее 6 символов');
+          return;
+        }
+
+        setLoading(true);
+        const sent = await sendVerificationEmail();
+        setLoading(false);
+
+        if (sent) {
+          setStep('verify');
+          setResendTimer(60);
+        } else {
+          setError('Ошибка отправки кода. Попробуйте позже.');
+        }
+      }
+    };
+
+    const handleVerify = () => {
+      if (verificationCode === generatedCode) {
+        if (register(email, username, password)) {
+          setShowAuthModal(false);
+          resetForm();
+        } else {
+          setError('Ошибка регистрации');
+        }
+      } else {
+        setError('Неверный код подтверждения');
+      }
+    };
+
+    const handleResend = async () => {
+      if (resendTimer > 0) return;
+      setLoading(true);
+      const sent = await sendVerificationEmail();
+      setLoading(false);
+      if (sent) {
+        setResendTimer(60);
+        setError('');
+      } else {
+        setError('Ошибка отправки кода');
+      }
+    };
+
+    const resetForm = () => {
+      setEmail('');
+      setUsername('');
+      setPassword('');
+      setVerificationCode('');
+      setGeneratedCode('');
+      setStep('form');
+      setError('');
+      setEmailError('');
+      setUsernameError('');
+    };
+
+    const handleClose = () => {
+      setShowAuthModal(false);
+      resetForm();
+    };
+
     return (
-      <Modal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} title={authMode === 'login' ? 'Вход' : 'Регистрация'}>
-        <div className="space-y-4">
-          <Input label="Email" type="email" value={email} onChange={setEmail} placeholder="email@example.com" />
-          {authMode === 'register' && <Input label="Имя пользователя" value={username} onChange={setUsername} placeholder="username" />}
-          <Input label="Пароль" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
-          {error && <p className="text-red-500 text-sm">{error}</p>}
-          <Button onClick={handleSubmit} className="w-full">{authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}</Button>
-          <p className="text-center text-neutral-400 text-sm">
-            {authMode === 'login' ? 'Нет аккаунта?' : 'Уже есть аккаунт?'}{' '}
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="text-white hover:underline">
-              {authMode === 'login' ? 'Зарегистрироваться' : 'Войти'}
+      <Modal isOpen={showAuthModal} onClose={handleClose} title={authMode === 'login' ? 'Вход' : step === 'verify' ? 'Подтверждение' : 'Регистрация'}>
+        {step === 'form' ? (
+          <div className="space-y-4">
+            <Input 
+              label="Email" 
+              type="email" 
+              value={email} 
+              onChange={authMode === 'register' ? validateEmail : setEmail} 
+              placeholder="email@example.com"
+              error={emailError}
+            />
+            {authMode === 'register' && (
+              <Input 
+                label="Имя пользователя" 
+                value={username} 
+                onChange={validateUsername} 
+                placeholder="username"
+                error={usernameError}
+              />
+            )}
+            <Input label="Пароль" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            <Button onClick={handleSubmit} disabled={loading || !!emailError || !!usernameError} className="w-full">
+              {loading ? 'Отправка...' : authMode === 'login' ? 'Войти' : 'Продолжить'}
+            </Button>
+            <p className="text-center text-neutral-400 text-sm">
+              {authMode === 'login' ? 'Нет аккаунта?' : 'Уже есть аккаунт?'}{' '}
+              <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); resetForm(); }} className="text-white hover:underline">
+                {authMode === 'login' ? 'Зарегистрироваться' : 'Войти'}
+              </button>
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="text-center py-4">
+              <div className="w-16 h-16 bg-neutral-800 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Icon name="mdi:email-check" className="w-8 h-8" />
+              </div>
+              <p className="text-neutral-400">
+                Мы отправили код подтверждения на
+              </p>
+              <p className="text-white font-medium">{email}</p>
+            </div>
+            <Input 
+              label="Код подтверждения" 
+              value={verificationCode} 
+              onChange={setVerificationCode} 
+              placeholder="000000"
+            />
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            <Button onClick={handleVerify} className="w-full">Подтвердить</Button>
+            <div className="text-center">
+              {resendTimer > 0 ? (
+                <p className="text-neutral-500 text-sm">
+                  Отправить повторно через {resendTimer} сек
+                </p>
+              ) : (
+                <button 
+                  onClick={handleResend} 
+                  disabled={loading}
+                  className="text-white hover:underline text-sm"
+                >
+                  {loading ? 'Отправка...' : 'Отправить код повторно'}
+                </button>
+              )}
+            </div>
+            <button onClick={() => setStep('form')} className="w-full text-neutral-400 hover:text-white text-sm">
+              ← Назад
             </button>
-          </p>
-        </div>
+          </div>
+        )}
       </Modal>
     );
   };
@@ -318,6 +483,12 @@ function ForumApp() {
     const [image, setImage] = useState('');
     const [isRule, setIsRule] = useState(false);
     const [isPinned, setIsPinned] = useState(false);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    const handleImage = async (file: File) => {
+      const base64 = await fileToBase64(file);
+      setImage(base64);
+    };
 
     const handleSubmit = () => {
       if (!title || !content || !currentUser) return;
@@ -330,7 +501,20 @@ function ForumApp() {
         <div className="space-y-4">
           <Input label="Заголовок" value={title} onChange={setTitle} placeholder="Введите заголовок" />
           <Textarea label="Содержание" value={content} onChange={setContent} placeholder="Введите текст новости" rows={6} />
-          <ImageUpload label="Изображение (необязательно)" onUpload={setImage} preview={image} />
+          <div 
+            className="border-2 border-dashed border-neutral-700 hover:border-neutral-500 rounded-xl p-6 text-center cursor-pointer transition-all"
+            onClick={() => inputRef.current?.click()}
+          >
+            <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleImage(e.target.files[0])} />
+            {image ? (
+              <img src={image} alt="" className="max-h-32 mx-auto rounded-lg" />
+            ) : (
+              <>
+                <Icon name="mdi:image" className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                <p className="text-neutral-400">Добавить изображение</p>
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-6">
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={isRule} onChange={e => setIsRule(e.target.checked)} className="w-4 h-4 rounded" />
@@ -356,7 +540,6 @@ function ForumApp() {
       <div className="grid gap-4">
         {categories.sort((a, b) => a.order - b.order).map(cat => {
           const catTopics = topics.filter(t => t.categoryId === cat.id);
-          const catReplies = replies.filter(r => catTopics.some(t => t.id === r.topicId));
           return (
             <motion.div key={cat.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
               onClick={() => openCategory(cat.id)}
@@ -470,6 +653,12 @@ function ForumApp() {
     const [title, setTitle] = useState('');
     const [content, setContent] = useState('');
     const [images, setImages] = useState<string[]>([]);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    const handleImage = async (file: File) => {
+      const base64 = await fileToBase64(file);
+      setImages([...images, base64]);
+    };
 
     const handleSubmit = () => {
       if (!title || !content || !currentUser || !selectedCategoryId) return;
@@ -482,7 +671,14 @@ function ForumApp() {
         <div className="space-y-4">
           <Input label="Заголовок" value={title} onChange={setTitle} placeholder="Заголовок темы" />
           <Textarea label="Содержание" value={content} onChange={setContent} placeholder="Напишите что-нибудь..." rows={6} />
-          <ImageUpload label="Добавить изображение" onUpload={url => setImages([...images, url])} />
+          <div 
+            className="border-2 border-dashed border-neutral-700 hover:border-neutral-500 rounded-xl p-6 text-center cursor-pointer transition-all"
+            onClick={() => inputRef.current?.click()}
+          >
+            <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleImage(e.target.files[0])} />
+            <Icon name="mdi:image" className="w-10 h-10 mx-auto mb-2 opacity-50" />
+            <p className="text-neutral-400">Добавить изображение</p>
+          </div>
           {images.length > 0 && (
             <div className="flex gap-2 flex-wrap">
               {images.map((img, i) => (
@@ -506,10 +702,16 @@ function ForumApp() {
     const [replyContent, setReplyContent] = useState('');
     const [replyImages, setReplyImages] = useState<string[]>([]);
     const [replyTo, setReplyTo] = useState<string | null>(null);
+    const replyInputRef = useRef<HTMLInputElement>(null);
     
     if (!topic) return null;
     const author = getUser(topic.authorId);
     const topicReplies = replies.filter(r => r.topicId === topic.id).sort((a, b) => a.createdAt - b.createdAt);
+
+    const handleReplyImage = async (file: File) => {
+      const base64 = await fileToBase64(file);
+      setReplyImages([...replyImages, base64]);
+    };
 
     const handleReply = () => {
       if (!replyContent || !currentUser) return;
@@ -668,15 +870,10 @@ function ForumApp() {
             )}
             <Textarea value={replyContent} onChange={setReplyContent} placeholder="Написать ответ..." rows={3} />
             <div className="flex items-center justify-between mt-3">
-              <button onClick={() => document.getElementById('reply-image-input')?.click()} className="text-neutral-400 hover:text-white">
+              <button onClick={() => replyInputRef.current?.click()} className="text-neutral-400 hover:text-white">
                 <Icon name="mdi:image" />
               </button>
-              <input id="reply-image-input" type="file" accept="image/*" className="hidden" onChange={async e => {
-                if (e.target.files?.[0]) {
-                  const base64 = await fileToBase64(e.target.files[0]);
-                  setReplyImages([...replyImages, base64]);
-                }
-              }} />
+              <input ref={replyInputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleReplyImage(e.target.files[0])} />
               <Button onClick={handleReply} size="sm">Отправить</Button>
             </div>
             {replyImages.length > 0 && (
@@ -769,6 +966,7 @@ function ForumApp() {
     const [title, setTitle] = useState('');
     const [content, setContent] = useState('');
     const [media, setMedia] = useState<MediaFile[]>([]);
+    const inputRef = useRef<HTMLInputElement>(null);
 
     const handleSubmit = () => {
       if (!title || !content || !currentUser) return;
@@ -798,13 +996,15 @@ function ForumApp() {
           </div>
           <Input label="Заголовок" value={title} onChange={setTitle} placeholder="Тема заявки" />
           <Textarea label="Описание" value={content} onChange={setContent} placeholder="Подробно опишите..." rows={6} />
-          <div className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all border-neutral-700 hover:border-neutral-500`}
-            onClick={() => document.getElementById('app-media-input')?.click()}>
+          <div 
+            className="border-2 border-dashed border-neutral-700 hover:border-neutral-500 rounded-xl p-6 text-center cursor-pointer transition-all"
+            onClick={() => inputRef.current?.click()}
+          >
             <Icon name="mdi:cloud-upload" className="w-10 h-10 mx-auto mb-2 opacity-50" />
             <p className="text-neutral-400">Добавить фото или видео</p>
             <p className="text-neutral-600 text-sm mt-1">Перетащите или нажмите для выбора</p>
           </div>
-          <input id="app-media-input" type="file" accept="image/*,video/*" className="hidden" onChange={e => e.target.files?.[0] && handleMedia(e.target.files[0])} />
+          <input ref={inputRef} type="file" accept="image/*,video/*" className="hidden" onChange={e => e.target.files?.[0] && handleMedia(e.target.files[0])} />
           {media.length > 0 && (
             <div className="flex gap-2 flex-wrap">
               {media.map(m => (
@@ -958,7 +1158,7 @@ function ForumApp() {
         </div>
         <div className="flex gap-4">
           <Input value={search} onChange={setSearch} placeholder="Поиск..." className="flex-1" />
-          <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
+          <select value={sortBy} onChange={e => setSortBy(e.target.value as 'date' | 'posts' | 'reputation')}
             className="bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 text-white">
             <option value="date">По дате</option>
             <option value="posts">По постам</option>
@@ -993,8 +1193,6 @@ function ForumApp() {
 
   const ProfileView = () => {
     const user = users.find(u => u.id === selectedUserId);
-    const [showAvatarUpload, setShowAvatarUpload] = useState(false);
-    const [showBannerUpload, setShowBannerUpload] = useState(false);
     const [reviewText, setReviewText] = useState('');
     const [reviewRating, setReviewRating] = useState(5);
     const [editBio, setEditBio] = useState(false);
@@ -1011,13 +1209,11 @@ function ForumApp() {
     const handleAvatarUpload = async (file: File) => {
       const base64 = await fileToBase64(file);
       updateProfile({ avatar: base64 });
-      setShowAvatarUpload(false);
     };
 
     const handleBannerUpload = async (file: File) => {
       const base64 = await fileToBase64(file);
       updateProfile({ banner: base64 });
-      setShowBannerUpload(false);
     };
 
     const handleReview = () => {
@@ -1057,12 +1253,12 @@ function ForumApp() {
                 <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleAvatarUpload(e.target.files[0])} />
                 {user.isOnline && <span className="absolute bottom-1 right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-neutral-900" />}
               </div>
-              <div className="flex-1 pt-14">
+              <div className="flex-1 pt-16">
                 <h1 className="text-2xl font-bold text-white">{user.username}</h1>
                 <div className="mt-2"><UserBadges user={user} /></div>
               </div>
               {!isOwnProfile && currentUser && (
-                <div className="flex gap-2 pt-14">
+                <div className="flex gap-2 pt-16">
                   <Button variant={isFollowing ? 'secondary' : 'primary'} onClick={() => followUser(user.id)}>
                     {isFollowing ? 'Отписаться' : 'Подписаться'}
                   </Button>
@@ -1270,6 +1466,8 @@ function ForumApp() {
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [banReason, setBanReason] = useState('');
     const [editUserData, setEditUserData] = useState<Partial<User>>({});
+    const [showBanModal, setShowBanModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
 
     const filteredUsers = users.filter(u => 
       u.username.toLowerCase().includes(search.toLowerCase()) || 
@@ -1281,6 +1479,7 @@ function ForumApp() {
       updateUser(selectedUser.id, editUserData);
       setSelectedUser(null);
       setEditUserData({});
+      setShowEditModal(false);
     };
 
     const handleBan = () => {
@@ -1288,6 +1487,19 @@ function ForumApp() {
       banUser(selectedUser.id, banReason);
       setSelectedUser(null);
       setBanReason('');
+      setShowBanModal(false);
+    };
+
+    const openEditModal = (user: User) => {
+      setSelectedUser(user);
+      setEditUserData({ username: user.username, email: user.email, bio: user.bio, role: user.role });
+      setShowEditModal(true);
+    };
+
+    const openBanModal = (user: User) => {
+      setSelectedUser(user);
+      setBanReason('');
+      setShowBanModal(true);
     };
 
     return (
@@ -1295,8 +1507,8 @@ function ForumApp() {
         <h1 className="text-2xl font-bold text-white">Админ-панель</h1>
 
         <div className="flex gap-2">
-          {['users', 'categories', 'applications'].map(t => (
-            <button key={t} onClick={() => setTab(t as any)}
+          {(['users', 'categories', 'applications'] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)}
               className={`px-4 py-2 rounded-lg ${tab === t ? 'bg-white text-black' : 'bg-neutral-800 text-white hover:bg-neutral-700'}`}>
               {t === 'users' ? 'Пользователи' : t === 'categories' ? 'Разделы' : 'Заявки'}
             </button>
@@ -1323,11 +1535,11 @@ function ForumApp() {
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="secondary" size="sm" onClick={() => { setSelectedUser(user); setEditUserData({ username: user.username, email: user.email, bio: user.bio, role: user.role }); }}>
+                      <Button variant="secondary" size="sm" onClick={() => openEditModal(user)}>
                         Изменить
                       </Button>
                       {!user.isBanned && user.role !== 'owner' && (
-                        <Button variant="danger" size="sm" onClick={() => { setSelectedUser(user); setBanReason(''); }}>Бан</Button>
+                        <Button variant="danger" size="sm" onClick={() => openBanModal(user)}>Бан</Button>
                       )}
                       {user.isBanned && (
                         <Button variant="secondary" size="sm" onClick={() => unbanUser(user.id)}>Разбан</Button>
@@ -1391,7 +1603,7 @@ function ForumApp() {
           </div>
         )}
 
-        <Modal isOpen={!!selectedUser && !banReason && Object.keys(editUserData).length > 0} onClose={() => { setSelectedUser(null); setEditUserData({}); }} title="Редактирование пользователя">
+        <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title="Редактирование пользователя">
           <div className="space-y-4">
             <Input label="Имя" value={editUserData.username || ''} onChange={v => setEditUserData({ ...editUserData, username: v })} />
             <Input label="Email" value={editUserData.email || ''} onChange={v => setEditUserData({ ...editUserData, email: v })} />
@@ -1409,7 +1621,7 @@ function ForumApp() {
           </div>
         </Modal>
 
-        <Modal isOpen={!!selectedUser && banReason !== undefined && Object.keys(editUserData).length === 0} onClose={() => { setSelectedUser(null); setBanReason(''); }} title="Блокировка пользователя">
+        <Modal isOpen={showBanModal} onClose={() => setShowBanModal(false)} title="Блокировка пользователя">
           <div className="space-y-4">
             <p className="text-neutral-400">Заблокировать {selectedUser?.username}?</p>
             <Textarea label="Причина блокировки" value={banReason} onChange={setBanReason} placeholder="Укажите причину..." />

@@ -92,6 +92,14 @@ export function useAuth() {
     dispatch({ type: 'UPDATE_USER', payload: { id: state.currentUser.id, data: { bookmarks: newBookmarks } } });
   };
 
+  const checkEmailExists = (email: string): boolean => {
+    return state.users.some(u => u.email.toLowerCase() === email.toLowerCase());
+  };
+
+  const checkUsernameExists = (username: string): boolean => {
+    return state.users.some(u => u.username.toLowerCase() === username.toLowerCase());
+  };
+
   return { 
     currentUser: state.currentUser, 
     users: state.users, 
@@ -101,6 +109,8 @@ export function useAuth() {
     updateProfile, 
     followUser, 
     blockUser, 
-    bookmarkTopic 
+    bookmarkTopic,
+    checkEmailExists,
+    checkUsernameExists
   };
 }
